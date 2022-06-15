@@ -13,11 +13,19 @@
 #define BACKLOG (10)
 #define INITIAL_SIZE (3)
 #define MESSAGE_LENGTH (256)
+#define POLL_TIMEOUT_COUNT (5)
+
+pthread_mutex_t mutex1 = PTHREAD_MUTEX_INITIALIZER;
 
 typedef struct sock_time {
   int socket;
   int wait_time;
 } sock_time_t;
+
+typedef struct sock_size {
+  int socket;
+  int * size;
+} sock_size_t;
 
 void add_poll(struct pollfd * pfds[], int * size, int * max_size, int fd) {
   if ((*size) == (*max_size)) {
@@ -68,8 +76,16 @@ void * send_delay(void * arg) {
   return NULL;
 }
 
+void decrement_size(int * size) {
+  pthread_mutex_lock(&mutex1);
+  (*size)--;
+  pthread_mutex_unlock(&mutex1);
+}
+
 void * play_game(void * arg) {
-  int socket = *((int *) arg);
+  sock_size_t * sock_size = (sock_size_t *) arg;
+  int socket = sock_size->socket;
+  int * size = sock_size->size;
   struct pollfd pfds[1];
   pfds[0].fd = socket;
   pfds[0].events = POLLIN;
@@ -81,6 +97,7 @@ void * play_game(void * arg) {
     int num_events = poll(pfds, 1, 500);
     if (num_events == -1) {
       perror("Thread: Polling");
+      decrement_size(size);
       pthread_exit(NULL);
     }
     else {
@@ -91,11 +108,13 @@ void * play_game(void * arg) {
         if (numbytes <= -1) {
           close(pfds[0].fd);
           perror("Thread: Receive");
+          decrement_size(size);
           pthread_exit(NULL);
         }
         else if (numbytes == 0) {
           close(pfds[0].fd);
           printf("Exited!\n");
+          decrement_size(size);
           pthread_exit(NULL);
         }
         int sleep_time = rand_int(250000, 1750000); // Microseconds
@@ -109,11 +128,13 @@ void * play_game(void * arg) {
         if (numbytes <= -1) {
           close(pfds[0].fd);
           perror("Thread: Receiving");
+          decrement_size(size);
           pthread_exit(NULL);
         }
         else if (numbytes == 0) {
           close(pfds[0].fd);
           printf("Exited!\n");
+          decrement_size(size);
           pthread_exit(NULL);
         }
 
@@ -132,6 +153,7 @@ void * play_game(void * arg) {
         if (sendbytes == -1) {
           close(pfds[0].fd);
           perror("Thread: Sending");
+          decrement_size(size);
           pthread_exit(NULL);
         }
       }
@@ -142,13 +164,26 @@ void * play_game(void * arg) {
 }
 
 
-void add_pthread(pthread_t threads[], int * size, int * max_size, int fd) {
+
+void add_pthread(pthread_t threads[], int * size, int * max_size, sock_size_t send) {
   if ((*size) == (*max_size)) {
     (*max_size) *= 2;
-    threads = reallocarray(threads, *max_size, *size);
+    //threads = reallocarray(threads, *max_size, sizeof(pthread_t));
+    pthread_t  * new_threads = (pthread_t *) malloc(*max_size * sizeof(pthread_t));
+    for (int i = 0; i < *size; i++) {
+      new_threads[i] = threads[i];
+    }
+    threads = new_threads;
   }
 
-  pthread_create(threads + (*size), NULL, play_game, &fd);
+  pthread_create(threads + (*size), NULL, play_game, &send);
+  if (pthread_detach(*(threads + (*size))) != 0) {
+    //perror("Detach Thread");
+    fprintf(stderr, "Detach Thread");
+  }
+  pthread_mutex_lock(&mutex1);
+  (*size)++;
+  pthread_mutex_unlock(&mutex1);
 }
 
 int main() {
@@ -164,9 +199,9 @@ int main() {
   socklen_t slen = sizeof(theiraddr);
 
   int thread_size = 0;
-  int max_thread_size = 10;
+  int max_thread_size = 3;
 
-  pthread_t threads[max_thread_size];
+  pthread_t * threads = malloc(max_thread_size * sizeof(pthread_t));
 
   int poll_size = 0;
   int max_size = 10;
@@ -214,9 +249,10 @@ int main() {
 
   char recv_buf[MESSAGE_LENGTH];
 
+  int timeout_poll_counter = 0;
+
   while (1) {
     int num_events = poll(pfds, poll_size, 2500);
-
     if (num_events == -1) {
       perror("Poll");
       return -3;
@@ -229,9 +265,24 @@ int main() {
             perror("Accept");
             return -4;
           }
-          add_pthread(threads, &thread_size, &max_thread_size, new_sock);
+          sock_size_t send = {new_sock, &thread_size};
+          add_pthread(threads, &thread_size, &max_thread_size, send);
         }
       }
+    }
+
+    if (thread_size == 0) {
+      timeout_poll_counter++;
+      if (timeout_poll_counter >= POLL_TIMEOUT_COUNT) {
+        //Clean Up Memory Here
+        close(pfds[0].fd);
+        free(threads);
+        free(pfds);
+        return 0;
+      }
+    }
+    else {
+      timeout_poll_counter = 0;
     }
   }
 }
