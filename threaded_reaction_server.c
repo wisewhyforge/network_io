@@ -113,7 +113,6 @@ void * play_game(void * arg) {
         }
         else if (numbytes == 0) {
           close(pfds[0].fd);
-          printf("Exited!\n");
           decrement_size(size);
           pthread_exit(NULL);
         }
@@ -133,14 +132,12 @@ void * play_game(void * arg) {
         }
         else if (numbytes == 0) {
           close(pfds[0].fd);
-          printf("Exited!\n");
           decrement_size(size);
           pthread_exit(NULL);
         }
 
         double time_taken = get_time_diff(&post_sleep, &receive_input) * 1000; // Seconds
         sleep_time *= 1e-3;
-        printf("Receive Time: %lf and Sleep Time: %d\n", time_taken, sleep_time);
         if (time_taken <= (double) sleep_time) {
           strcpy(send_buf, "Too Early!\n");
         }
@@ -165,20 +162,19 @@ void * play_game(void * arg) {
 
 
 
-void add_pthread(pthread_t threads[], int * size, int * max_size, sock_size_t send) {
+void add_pthread(pthread_t * threads[], int * size, int * max_size, sock_size_t send) {
   if ((*size) == (*max_size)) {
     (*max_size) *= 2;
-    //threads = reallocarray(threads, *max_size, sizeof(pthread_t));
     pthread_t  * new_threads = (pthread_t *) malloc(*max_size * sizeof(pthread_t));
     for (int i = 0; i < *size; i++) {
-      new_threads[i] = threads[i];
+      new_threads[i] = (*threads)[i];
     }
-    threads = new_threads;
+    free((*threads));
+    (*threads) = new_threads;
   }
 
-  pthread_create(threads + (*size), NULL, play_game, &send);
-  if (pthread_detach(*(threads + (*size))) != 0) {
-    //perror("Detach Thread");
+  pthread_create((*threads) + (*size), NULL, play_game, &send);
+  if (pthread_detach(*((*threads) + (*size))) != 0) {
     fprintf(stderr, "Detach Thread");
   }
   pthread_mutex_lock(&mutex1);
@@ -266,7 +262,7 @@ int main() {
             return -4;
           }
           sock_size_t send = {new_sock, &thread_size};
-          add_pthread(threads, &thread_size, &max_thread_size, send);
+          add_pthread(&threads, &thread_size, &max_thread_size, send);
         }
       }
     }
